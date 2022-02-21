@@ -125,7 +125,7 @@ void setupWifi() {
   Serial.println(ssid);
 
   // Set the device as a Station and Soft Access Point simultaneously
-  WiFi.mode(WIFI_AP_STA);
+  WiFi.mode(WIFI_STA);
   //esp_wifi_set_mac(WIFI_IF_STA, &newMACAddress[0]);
 
   int32_t channel = getWiFiChannel(ssid);
@@ -398,7 +398,6 @@ void setup(){
   Serial.begin(115200);
   Serial.println(WiFi.macAddress());
 
-  //WiFi.mode(WIFI_STA);
   //setupWifi();
 
   SPIFFS.begin();
