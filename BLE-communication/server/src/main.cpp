@@ -36,6 +36,10 @@
 // https://www.uuidgenerator.net/
 #define SERVICE_UUID "ed6a9e2f-2408-4b78-a3d6-3aa55f71a38a"
 
+//Default Temperature is in Celsius
+//Comment the next line for Temperature in Fahrenheit
+#define temperatureCelsius
+
 // Temperature Characteristic and Descriptor
 #ifdef temperatureCelsius
   BLECharacteristic bmeTemperatureCelsiusCharacteristics("cba1d466-344c-4be3-ab3f-189f80dd7518", BLECharacteristic::PROPERTY_NOTIFY);
@@ -125,7 +129,7 @@ void setupWifi() {
   Serial.println(ssid);
 
   // Set the device as a Station and Soft Access Point simultaneously
-  WiFi.mode(WIFI_STA);
+  WiFi.mode(WIFI_AP_STA);
   //esp_wifi_set_mac(WIFI_IF_STA, &newMACAddress[0]);
 
   int32_t channel = getWiFiChannel(ssid);
@@ -403,40 +407,8 @@ void setup(){
   SPIFFS.begin();
 
   //set up for wasm
-  run_wasm(NULL);
+  //run_wasm(NULL);
 
-  // Create the BLE Device
-  BLEDevice::init(bleServerName);
-
-  Serial.println("ble initilized");
-
-  // Create the BLE Server
-  BLEServer *pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new MyServerCallbacks());
-
-  // Create the BLE Service
-  BLEService *bmeService = pServer->createService(SERVICE_UUID);
-
-  // Create BLE Characteristics and Create a BLE Descriptor
-  // Temperature
-  #ifdef temperatureCelsius
-    bmeService->addCharacteristic(&bmeTemperatureCelsiusCharacteristics);
-    bmeTemperatureCelsiusDescriptor.setValue("BME temperature Celsius");
-    bmeTemperatureCelsiusCharacteristics.addDescriptor(&bmeTemperatureCelsiusDescriptor);
-  #else
-    bmeService->addCharacteristic(&bmeTemperatureFahrenheitCharacteristics);
-    bmeTemperatureFahrenheitDescriptor.setValue("BME temperature Fahrenheit");
-    bmeTemperatureFahrenheitCharacteristics.addDescriptor(&bmeTemperatureFahrenheitDescriptor);
-  #endif 
-
-  // Start the service
-  bmeService->start();
-
-  // Start advertising
-  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(SERVICE_UUID);
-  pServer->getAdvertising()->start();
-  Serial.println("Waiting a client connection to notify...");
 
   /*if ( !MDNS.begin("esp-net") ) {
     Serial.println( "Error setting up MDNS responder!" );
@@ -474,6 +446,44 @@ void setup(){
   });
 
   server.begin();*/
+
+  // Create the BLE Device
+  BLEDevice::init(bleServerName);
+
+  Serial.println("ble initilized");
+
+  // Create the BLE Server
+  BLEServer *pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+
+  // Create the BLE Service
+  BLEService *bmeService = pServer->createService(SERVICE_UUID);
+
+  // Create BLE Characteristics and Create a BLE Descriptor
+  // Temperature
+  #ifdef temperatureCelsius
+    bmeService->addCharacteristic(&bmeTemperatureCelsiusCharacteristics);
+    bmeTemperatureCelsiusDescriptor.setValue("BME temperature Celsius");
+    bmeTemperatureCelsiusCharacteristics.addDescriptor(&bmeTemperatureCelsiusDescriptor);
+  #else
+    bmeService->addCharacteristic(&bmeTemperatureFahrenheitCharacteristics);
+    bmeTemperatureFahrenheitDescriptor.setValue("BME temperature Fahrenheit");
+    bmeTemperatureFahrenheitCharacteristics.addDescriptor(&bmeTemperatureFahrenheitDescriptor);
+  #endif 
+
+  // Humidity
+  bmeService->addCharacteristic(&bmeHumidityCharacteristics);
+  bmeHumidityDescriptor.setValue("BME humidity");
+  bmeHumidityCharacteristics.addDescriptor(new BLE2902());
+
+  // Start the service
+  bmeService->start();
+
+  // Start advertising
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pServer->getAdvertising()->start();
+  Serial.println("Waiting a client connection to notify...");
 
 }
  
@@ -543,10 +553,10 @@ void loop(){
     }
   }
   
-  wasm_task();
+  /*wasm_task();
     Serial.println("Wasm result:");
-    Serial.println(wasmResult);
+    Serial.println(wasmResult);*/
 
-  delay(5000);
+  delay(3000);
 }
 
