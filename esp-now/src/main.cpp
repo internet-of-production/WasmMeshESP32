@@ -169,7 +169,7 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *data, int len) {
     case 0x01:
       Serial.println("Start of new file transmit");
       currentTransmitOffset = 0;
-      currentTransmitOffset = (*data++) << 8 | *data;
+      numberOfPackets = (*data++) << 8 | *data;
       Serial.println("currentNumberOfPackets = " + String(numberOfPackets));
       SPIFFS.remove("/main.wasm");
       break;
