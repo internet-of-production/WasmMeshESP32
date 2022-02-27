@@ -47,6 +47,9 @@ static BLEUUID bmeServiceUUID("ed6a9e2f-2408-4b78-a3d6-3aa55f71a38a");
 // Humidity Characteristic
 static BLEUUID humidityCharacteristicUUID("ca73b3ba-39f6-4ab3-91ae-186dc9577d99");
 
+// Wasm Characteristic
+static BLEUUID wasmCharacteristicUUID("f5703842-3515-4da8-ab2e-d40fbf457105");
+
 //Flags stating if should begin connecting and if the connection is up
 static boolean doConnect = false;
 static boolean connected = false;
@@ -57,6 +60,7 @@ static BLEAddress *pServerAddress;
 //Characteristicd that we want to read
 static BLERemoteCharacteristic* temperatureCharacteristic;
 static BLERemoteCharacteristic* humidityCharacteristic;
+static BLERemoteCharacteristic* wasmCharacteristic;
 
 //Activate notify
 const uint8_t notificationOn[] = {0x1, 0x0};
@@ -69,23 +73,13 @@ char* humidityChar;
 //Flags to check whether new temperature and humidity readings are available
 boolean newTemperature = false;
 boolean newHumidity = false;
+boolean newWasm = false;
 
 IM3Environment env;
 IM3Runtime runtime;
 IM3Module module;
 IM3Function calcWasm;
 int wasmResult = 0;
-
-typedef struct struct_message {
-    float temp;
-    float hum;
-} struct_message;
-
-// Create a struct_message for the output
-struct_message outputReadings;
-
-// Create a struct_message to hold incoming data
-struct_message incomingReadings;
 
 // Variable to store if sending data was successful
 String success;
@@ -113,6 +107,48 @@ static void humidityNotifyCallback(BLERemoteCharacteristic* pBLERemoteCharacteri
   newHumidity = true;
 }
 
+//When the BLE Server sends a new Wasm file with the notify property
+static void wasmNotifyCallback(BLERemoteCharacteristic* pBLERemoteCharacteristic, uint8_t* data, size_t len, bool isNotify){
+
+  Serial.println("EntryNotifyCallback");
+  Serial.print("Payload size: ");
+  Serial.println(len);
+
+  switch (*data++)
+  {
+    case 0x01:
+      Serial.println("Start of new file transmit");
+      currentTransmitOffset = 0;
+      numberOfPackets = (*data++) << 8 | *data;
+      Serial.println("currentNumberOfPackets = " + String(numberOfPackets));
+      SPIFFS.remove("/main.wasm");
+      break;
+    case 0x02:
+      currentTransmitOffset = (*data++) << 8 | *data++; 
+      File file = SPIFFS.open("/main.wasm",FILE_APPEND);
+      if (!file)
+        Serial.println("Error opening file ...");
+        
+      for (int i=0; i < (len-3); i++)
+      {
+        //byte dat = *data++;
+        //Serial.println(dat);
+        file.write(*data++);
+      }
+      file.close();
+
+      if (currentTransmitOffset == numberOfPackets)
+      {
+        Serial.println("done wasm file transfer");
+        File file = SPIFFS.open("/main.wasm");
+        Serial.println(file.size());
+        file.close();
+      }
+      
+      break;
+  } 
+}
+
 //Connect to the BLE Server that has the name, Service, and Characteristics
 bool connectToServer(BLEAddress pAddress) {
    BLEClient* pClient = BLEDevice::createClient();
@@ -130,18 +166,20 @@ bool connectToServer(BLEAddress pAddress) {
   }
  
   // Obtain a reference to the characteristics in the service of the remote BLE server.
-  temperatureCharacteristic = pRemoteService->getCharacteristic(temperatureCharacteristicUUID);
-  humidityCharacteristic = pRemoteService->getCharacteristic(humidityCharacteristicUUID);
+  //temperatureCharacteristic = pRemoteService->getCharacteristic(temperatureCharacteristicUUID);
+  //humidityCharacteristic = pRemoteService->getCharacteristic(humidityCharacteristicUUID);
+  wasmCharacteristic = pRemoteService->getCharacteristic(wasmCharacteristicUUID);
 
-  if (temperatureCharacteristic == nullptr || humidityCharacteristic == nullptr) {
+  if (wasmCharacteristic == nullptr) {
     Serial.print("Failed to find our characteristic UUID");
     return false;
   }
   Serial.println("Found our characteristics");
  
   //Assign callback functions for the Characteristics
-  temperatureCharacteristic->registerForNotify(temperatureNotifyCallback);
-  humidityCharacteristic->registerForNotify(humidityNotifyCallback);
+  //temperatureCharacteristic->registerForNotify(temperatureNotifyCallback);
+  //humidityCharacteristic->registerForNotify(humidityNotifyCallback);
+  wasmCharacteristic->registerForNotify(wasmNotifyCallback);
   return true;
 }
 
@@ -414,8 +452,9 @@ void loop(){
     if (connectToServer(*pServerAddress)) {
       Serial.println("We are now connected to the BLE Server.");
       //Activate the Notify property of each Characteristic
-      temperatureCharacteristic->getDescriptor(BLEUUID((uint16_t)0x2902))->writeValue((uint8_t*)notificationOn, 2, true);
-      humidityCharacteristic->getDescriptor(BLEUUID((uint16_t)0x2902))->writeValue((uint8_t*)notificationOn, 2, true);
+      //temperatureCharacteristic->getDescriptor(BLEUUID((uint16_t)0x2902))->writeValue((uint8_t*)notificationOn, 2, true);
+      //humidityCharacteristic->getDescriptor(BLEUUID((uint16_t)0x2902))->writeValue((uint8_t*)notificationOn, 2, true);
+      wasmCharacteristic->getDescriptor(BLEUUID((uint16_t)0x2902))->writeValue((uint8_t*)notificationOn, 2, true);
       connected = true;
     } else {
       Serial.println("We have failed to connect to the server; Restart your device to scan for nearby BLE server again.");
@@ -424,12 +463,12 @@ void loop(){
   }
 
   //if new temperature readings are available, print vales and reset flags
-  if (newTemperature && newHumidity){
+  /*if (newTemperature && newHumidity){
     newTemperature = false;
     newHumidity = false;
     Serial.println(temperatureChar);
     Serial.println(humidityChar);
-  }
+  }*/
   
   wasm_task();
     Serial.println("Wasm result:");
