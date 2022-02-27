@@ -19,12 +19,14 @@
 #include "wasm3_defs.h"
 
 #include <SPIFFS.h>
+#include <EEPROM.h>
 
 #define WASM_STACK_SLOTS    4000
 #define CALC_INPUT  2
-#define FATAL(func, msg) { Serial.print("Fatal: " func " "); Serial.println(msg); return; }
+#define FATAL(func, msg) { Serial.print("Fatal: " func " "); Serial.println(msg);}
 //#define MAX_PAYLOAD_SIZE 240
 #define bleServerName "Wasm_ESP32"
+#define EEPROM_SIZE 1 //save static status in the flash
 
 // BLE Service. Set your service's UUID
 static BLEUUID serviceUUID("ed6a9e2f-2408-4b78-a3d6-3aa55f71a38a");
@@ -64,6 +66,21 @@ int currentTransmitOffset = 0;
 int numberOfPackets = 0;
 byte sendNextPacketFlag = 0;
 
+
+//EEPROM.read(0x00) == 1 => Wasm file is invalid
+static void setWasmInvalidFlag(){
+  EEPROM.write(0x00, 0x01);
+  EEPROM.commit();
+}
+
+static void setWasmValidFlag(){
+  EEPROM.write(0x00, 0x00);
+  EEPROM.commit();
+}
+
+bool isWasmExecutable(){
+  return EEPROM.read(0x00) == 0;
+}
 
 
 /**
@@ -109,6 +126,7 @@ static void wasmNotifyCallback(BLERemoteCharacteristic* pBLERemoteCharacteristic
         File file = SPIFFS.open("/main.wasm");
         Serial.println(file.size());
         file.close();
+        setWasmValidFlag();
       }
       
       break;
@@ -162,12 +180,10 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
   }
 };
 
-
 /**
  * @fn 
  * WASM setup using wasm3
  */
-
 static void run_wasm(void*)
 {
   // load wasm from SPIFFS
@@ -191,20 +207,20 @@ static void run_wasm(void*)
   //uint8_t* wasm = (uint8_t*)build_app_wasm;
 
   env = m3_NewEnvironment ();
-  if (!env) FATAL("NewEnvironment", "failed");
+  if (!env) {setWasmInvalidFlag(); FATAL("NewEnvironment", "failed"); ESP.restart();}
 
   runtime = m3_NewRuntime (env, WASM_STACK_SLOTS, NULL);
-  if (!runtime) FATAL("m3_NewRuntime", "failed");
+  if (!runtime) {setWasmInvalidFlag(); FATAL("m3_NewRuntime", "failed"); ESP.restart();}
 
   #ifdef WASM_MEMORY_LIMIT
     runtime->memoryLimit = WASM_MEMORY_LIMIT;
   #endif
 
    result = m3_ParseModule (env, &module, build_main_wasm, build_main_wasm_len);
-   if (result) FATAL("m3_ParseModule", result);
+   if (result) {setWasmInvalidFlag(); FATAL("m3_ParseModule", result); ESP.restart();}
 
    result = m3_LoadModule (runtime, module);
-   if (result) FATAL("m3_LoadModule", result);
+   if (result) {setWasmInvalidFlag(); FATAL("m3_LoadModule", result); ESP.restart();}
 
    // link
    //result = LinkArduino (runtime);
@@ -212,7 +228,7 @@ static void run_wasm(void*)
 
 
    result = m3_FindFunction (&calcWasm, runtime, "calcWasm");
-   if (result) FATAL("m3_FindFunction(calcWasm)", result);
+   if (result) {setWasmInvalidFlag(); FATAL("m3_FindFunction(calcWasm)", result); ESP.restart();}
 
    Serial.println("Running WebAssembly...");
 
@@ -239,12 +255,16 @@ static void run_wasm(void*)
     */
     result = m3_Call(calcWasm,CALC_INPUT,i_argptrs);                       
     if(result){
+      setWasmInvalidFlag();
       FATAL("m3_Call(calcWasm):", result);
+      ESP.restart();
     }
 
     result = m3_GetResultsV(calcWasm, &wasmResult);
-      if(result){
+    if(result){
+      setWasmInvalidFlag();
       FATAL("m3_GetResultsV(calcWasm):", result);
+      ESP.restart();
     }
 
   }
@@ -258,9 +278,12 @@ void setup(){
   Serial.begin(115200);
 
   SPIFFS.begin();
+  EEPROM.begin(EEPROM_SIZE);
 
   //set up for wasm
-  run_wasm(NULL);
+  if(isWasmExecutable()){
+    run_wasm(NULL);
+  }
 
   //Init BLE device
   BLEDevice::init("");
@@ -296,9 +319,11 @@ void loop(){
   }
 
   
-  wasm_task();
+  if(isWasmExecutable()) {
+    wasm_task();
     Serial.println("Wasm result:");
     Serial.println(wasmResult);
+  }
 
   delay(5000);
 }
