@@ -29,7 +29,8 @@
 #define CALC_INPUT  2
 #define FATAL(func, msg) { Serial.print("Fatal: " func " "); Serial.println(msg); return; }
 #define CHANNEL 0
-#define MAX_PAYLOAD_SIZE 240 //ESP_NOW_MAX_DATA_LEN (250byte) is not usable due to packet's structure. (it also sends packets flag, total packet size, offset, etc.) 
+//Default MTU of BLE is 23 Byte. Max. size is not usable due to packet's structure. Furthermore, notfy allows only max. 20 Byte. (It also sends packets flag, total packet size, offset, etc.)
+#define MAX_PAYLOAD_SIZE 15 
 #define bleServerName "Wasm_ESP32"
 
 // See the following for generating UUIDs:
@@ -53,22 +54,16 @@
 BLECharacteristic bmeHumidityCharacteristics("ca73b3ba-39f6-4ab3-91ae-186dc9577d99", BLECharacteristic::PROPERTY_NOTIFY);
 BLEDescriptor bmeHumidityDescriptor(BLEUUID((uint16_t)0x2903));
 
+// Wasm Characteristic and Descriptor
+BLECharacteristic wasmCharacteristics("f5703842-3515-4da8-ab2e-d40fbf457105", BLECharacteristic::PROPERTY_NOTIFY);
+BLEDescriptor wasmDescriptor(BLEUUID((uint16_t)0x2904));
+
 IM3Environment env;
 IM3Runtime runtime;
 IM3Module module;
 IM3Function calcWasm;
 int wasmResult = 0;
 
-typedef struct struct_message {
-    float temp;
-    float hum;
-} struct_message;
-
-// Create a struct_message for the output
-struct_message outputReadings;
-
-// Create a struct_message to hold incoming data
-struct_message incomingReadings;
 
 // Variable to store if sending data was successful
 String success;
@@ -91,6 +86,9 @@ float hum;
 // Timer variables
 unsigned long lastTime = 0;
 unsigned long timerDelay = 30000;
+
+//! This flag == true: a new wasm file is available.
+bool newWasmAvailable = true;
 
 /**
  * @fn 
@@ -179,7 +177,9 @@ class MyServerCallbacks: public BLEServerCallbacks {
 */
 
 void sendData(uint8_t * dataArray, uint8_t dataArrayLength) {
-  
+    wasmCharacteristics.setValue(dataArray, dataArrayLength);
+    wasmCharacteristics.notify();
+    sendNextPacketFlag = 1;
 }
 
 
@@ -230,6 +230,7 @@ void sendNextPacket()
   {
     currentTransmitOffset = 0;
     numberOfPackets = 0;
+    newWasmAvailable = false;
     Serial.println("Done submiting files");
     //takeNextPhotoFlag = 1;
     return;
@@ -277,10 +278,14 @@ void sendNextPacket()
   } //end for
 
   sendData(messageArray, sizeof(messageArray));
+  Serial.print("Next packet transmitted! ");
+  Serial.print(numberOfPackets - currentTransmitOffset);
+  Serial.println(" packets remain");
   file.close();
 
 }
 
+//TODO: If the simultaneous run of WiFi and BLE is possible, set true to newWasm flag after uploading
 /**
  * @fn 
  * Browser Editer: Handle uploaded data
@@ -476,6 +481,11 @@ void setup(){
   bmeHumidityDescriptor.setValue("BME humidity");
   bmeHumidityCharacteristics.addDescriptor(new BLE2902());
 
+  // Wasm
+  bmeService->addCharacteristic(&wasmCharacteristics);
+  wasmDescriptor.setValue("Upload Wasm file");
+  wasmCharacteristics.addDescriptor(new BLE2902());
+
   // Start the service
   bmeService->start();
 
@@ -511,45 +521,18 @@ void loop(){
     sendNextPacket();*/
 
   if (deviceConnected) {
-    if ((millis() - lastTime) > timerDelay) {
-      // Read temperature as Celsius (the default)
-      temp = 20.0;
-      // Fahrenheit
-      tempF = temp*1.8 +32;
-      // Read humidity
-      hum = 60.0;
-      //Notify temperature. Convert double to ASCII Using dtostrf()
-      #ifdef temperatureCelsius
-        static char temperatureCTemp[6];
-        dtostrf(temp, 6, 2, temperatureCTemp);
-        //Set temperature Characteristic value and notify connected client
-        bmeTemperatureCelsiusCharacteristics.setValue(temperatureCTemp);
-        bmeTemperatureCelsiusCharacteristics.notify();
-        Serial.print("Temperature Celsius: ");
-        Serial.print(temp);
-        Serial.print(" ºC");
-      #else
-        static char temperatureFTemp[6];
-        dtostrf(tempF, 6, 2, temperatureFTemp);
-        //Set temperature Characteristic value and notify connected client
-        bmeTemperatureFahrenheitCharacteristics.setValue(temperatureFTemp);
-        bmeTemperatureFahrenheitCharacteristics.notify();
-        Serial.print("Temperature Fahrenheit: ");
-        Serial.print(tempF);
-        Serial.print(" ºF");
-      #endif
+    //if ((millis() - lastTime) > timerDelay) {
+      if(newWasmAvailable){
+        if(currentTransmitOffset == 0 && !sendNextPacketFlag){
+          startTransmit();
+        }
+        else if(sendNextPacketFlag){
+          sendNextPacket();
+        }
       
-      //Notify humidity reading from BME
-      static char humidityTemp[6];
-      dtostrf(hum, 6, 2, humidityTemp);
-      //Set humidity Characteristic value and notify connected client
-      bmeHumidityCharacteristics.setValue(humidityTemp);
-      bmeHumidityCharacteristics.notify();   
-      Serial.print(" - Humidity: ");
-      Serial.print(hum);
-      Serial.println(" %");
       
-      lastTime = millis();
+      //lastTime = millis();
+    //}
     }
   }
   
@@ -557,6 +540,6 @@ void loop(){
     Serial.println("Wasm result:");
     Serial.println(wasmResult);*/
 
-  delay(3000);
+  delay(1000);
 }
 
