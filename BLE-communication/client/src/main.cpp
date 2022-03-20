@@ -4,6 +4,9 @@
  * Links of references:
  + https://randomnerdtutorials.com/esp32-ble-server-client/
  */
+
+//lld_pdu_get_tx_flush_nb HCI packet count mismatch causes sometimes. https://github.com/espressif/esp-idf/issues/8303
+
 #include <Arduino.h>
 #include <SPI.h>
 
@@ -24,9 +27,11 @@
 #define WASM_STACK_SLOTS    4000
 #define CALC_INPUT  2
 #define FATAL(func, msg) { Serial.print("Fatal: " func " "); Serial.println(msg);}
-//#define MAX_PAYLOAD_SIZE 240
+//#define BLE_MTU 100 //default: 23Byte (20Byte for notify), max. 512Byte
 #define bleServerName "Wasm_ESP32"
-#define EEPROM_SIZE 1 //save static status in the flash
+#define EEPROM_SIZE 2 //save static status in the flash
+#define WASM_INVALID_FLAG_OFFSET 0x00
+#define WASM_VERSION_ID_OFFSET 0x01
 
 // BLE Service. Set your service's UUID
 static BLEUUID serviceUUID("ed6a9e2f-2408-4b78-a3d6-3aa55f71a38a");
@@ -65,21 +70,32 @@ String success;
 int currentTransmitOffset = 0;
 int numberOfPackets = 0;
 byte sendNextPacketFlag = 0;
+bool wasmUpdateFlag = false;
+uint8_t wasmUpdateVersion = 0;
 
 
 //EEPROM.read(0x00) == 1 => Wasm file is invalid
 static void setWasmInvalidFlag(){
-  EEPROM.write(0x00, 0x01);
+  EEPROM.write(WASM_INVALID_FLAG_OFFSET, 0x01);
   EEPROM.commit();
 }
 
 static void setWasmValidFlag(){
-  EEPROM.write(0x00, 0x00);
+  EEPROM.write(WASM_INVALID_FLAG_OFFSET, 0x00);
   EEPROM.commit();
 }
 
 bool isWasmExecutable(){
-  return EEPROM.read(0x00) == 0;
+  return EEPROM.read(WASM_INVALID_FLAG_OFFSET) == 0;
+}
+
+static void setWasmVersionId(uint8_t id){
+  EEPROM.write(WASM_VERSION_ID_OFFSET, id);
+  EEPROM.commit();
+}
+
+uint8_t getWasmVersionId(){
+  return EEPROM.read(WASM_VERSION_ID_OFFSET);
 }
 
 
@@ -103,33 +119,43 @@ static void wasmNotifyCallback(BLERemoteCharacteristic* pBLERemoteCharacteristic
       Serial.println("Start of new file transmit");
       currentTransmitOffset = 0;
       numberOfPackets = (*data++) << 8 | *data;
-      Serial.println("currentNumberOfPackets = " + String(numberOfPackets));
-      SPIFFS.remove("/main.wasm");
-      break;
+      wasmUpdateFlag = (*++data != getWasmVersionId());
+      if(wasmUpdateFlag || !isWasmExecutable()){
+        wasmUpdateVersion = *data;
+        Serial.println("currentNumberOfPackets = " + String(numberOfPackets));
+        SPIFFS.remove("/main.wasm");
+        break;
+      }
     case 0x02:
-      currentTransmitOffset = (*data++) << 8 | *data++; 
-      File file = SPIFFS.open("/main.wasm",FILE_APPEND);
-      if (!file)
-        Serial.println("Error opening file ...");
-        
-      for (int i=0; i < (len-3); i++)
-      {
-        //byte dat = *data++;
-        //Serial.println(dat);
-        file.write(*data++);
-      }
-      file.close();
-
-      if (currentTransmitOffset == numberOfPackets)
-      {
-        Serial.println("done wasm file transfer");
-        File file = SPIFFS.open("/main.wasm");
-        Serial.println(file.size());
+      if(wasmUpdateFlag || !isWasmExecutable()){
+        currentTransmitOffset = (*data++) << 8 | *data++; 
+        File file = SPIFFS.open("/main.wasm",FILE_APPEND);
+        if (!file)
+          Serial.println("Error opening file ...");
+          
+        for (int i=0; i < (len-3); i++)
+        {
+          //byte dat = *data++;
+          //Serial.println(dat);
+          file.write(*data++);
+        }
         file.close();
-        setWasmValidFlag();
+
+        if (currentTransmitOffset == numberOfPackets)
+        {
+          Serial.println("done wasm file transfer");
+          File file = SPIFFS.open("/main.wasm");
+          Serial.println(file.size());
+          file.close();
+          setWasmValidFlag();
+          setWasmVersionId(wasmUpdateVersion);
+          ESP.restart();
+        }
+        break;
       }
-      
-      break;
+
+    default: break;
+
   } 
 }
 
@@ -141,7 +167,7 @@ static void wasmNotifyCallback(BLERemoteCharacteristic* pBLERemoteCharacteristic
  */
 bool connectToServer(BLEAddress pAddress) {
    BLEClient* pClient = BLEDevice::createClient();
- 
+   //BLEDevice::setMTU(250);
   // Connect to the remove BLE Server.
   pClient->connect(pAddress);
   Serial.println("Connected to server");
@@ -200,6 +226,8 @@ static void run_wasm(void*)
   wasmFile.readBytes((char *) build_main_wasm, build_main_wasm_len);
 
   Serial.println("Loading WebAssembly was successful");
+  Serial.print("Wasm Version ID: ");
+  Serial.println(getWasmVersionId());
 
   M3Result result = m3Err_none;
 
@@ -282,6 +310,7 @@ void setup(){
 
   //set up for wasm
   if(isWasmExecutable()){
+    Serial.println("Loading wasm");
     run_wasm(NULL);
   }
 
@@ -293,7 +322,8 @@ void setup(){
   BLEScan* pBLEScan = BLEDevice::getScan();
   pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
   pBLEScan->setActiveScan(true);
-  pBLEScan->start(30);
+  pBLEScan->start(30); //Scan for 30s
+  pBLEScan->clearResults(); //clear results from BLEScan buffer to release memory
 
 }
 
@@ -313,6 +343,7 @@ void loop(){
       wasmCharacteristic->getDescriptor(BLEUUID((uint16_t)0x2902))->writeValue((uint8_t*)notificationOn, 2, true);
       connected = true;
     } else {
+      //TODO: Consider disconnecting while running, e.g., restart of the server. (If an ESP is an intermediate node, it must restart after receiving a new wasm, then must advertise)
       Serial.println("We have failed to connect to the server; Restart your device to scan for nearby BLE server again.");
     }
     doConnect = false;
@@ -325,6 +356,6 @@ void loop(){
     Serial.println(wasmResult);
   }
 
-  delay(5000);
+  delay(1000);
 }
 
