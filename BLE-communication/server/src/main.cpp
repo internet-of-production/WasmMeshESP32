@@ -24,7 +24,7 @@
 #define FATAL(func, msg) { Serial.print("Fatal: " func " "); Serial.println(msg); return; }
 #define CHANNEL 0
 //Default MTU of BLE is 23 Byte. Max. size is not usable due to packet's structure. Furthermore, notfy allows only max. 20 Byte. (It also sends packets flag, total packet size, offset, etc.)
-#define MAX_PAYLOAD_SIZE 15 
+#define MAX_PAYLOAD_SIZE 17 
 #define bleServerName "Wasm_ESP32"
 
 // See the following for generating UUIDs:
@@ -35,6 +35,9 @@
 // Wasm Characteristic and Descriptor
 BLECharacteristic wasmCharacteristics("f5703842-3515-4da8-ab2e-d40fbf457105", BLECharacteristic::PROPERTY_NOTIFY);
 BLEDescriptor wasmDescriptor(BLEUUID((uint16_t)0x2901));
+
+//TODO: Update if overwritten by WebIDE. The current ID in flash. 
+uint8_t wasmVersionID = 101;
 
 int wasmResult = 0;
 
@@ -120,6 +123,16 @@ void setupWifi() {
   Serial.println(WiFi.localIP());
 }
 
+
+/**
+ * @fn
+ * reset transmission status (after disconnecting)
+ */
+void resetTransmissionStatus(){
+  currentTransmitOffset = 0;
+  sendNextPacketFlag = 0;
+}
+
 /**
  * @class MyServerCallbacks
  * @brief Setup callbacks onConnect and onDisconnect. (BLEServerCallbacks)
@@ -130,6 +143,8 @@ class MyServerCallbacks: public BLEServerCallbacks {
     deviceConnected = true;
   };
   void onDisconnect(BLEServer* pServer) {
+    resetTransmissionStatus();
+    pServer->getAdvertising()->start();
     deviceConnected = false;
   }
 };
@@ -174,8 +189,9 @@ void startTransmit()
   currentTransmitOffset = 0;
   numberOfPackets = ceil(fileSize/MAX_PAYLOAD_SIZE); //split binary data into the MTU size
   Serial.println(numberOfPackets);
-   //integer value must be splitted into uint_8 because of esp_now_send(). the bit shift >>8 means that it takes second byte. 
-  uint8_t message[] = {0x01, numberOfPackets >> 8, (byte) numberOfPackets};
+  //TODO: Read the current wasmVersionID from flash !!
+  //integer value must be splitted into uint_8 because of esp_now_send(). the bit shift >>8 means that it takes second byte. 
+  uint8_t message[] = {0x01, numberOfPackets >> 8, (byte) numberOfPackets, wasmVersionID};
   sendData(message, sizeof(message));
 }
 
@@ -282,6 +298,34 @@ void handleUpload(AsyncWebServerRequest *request, String filename, size_t index,
     }
 }
 
+void ble_start(){
+  // Create the BLE Device
+  BLEDevice::init(bleServerName);
+
+  Serial.println("ble initilized");
+
+  // Create the BLE Server
+  BLEServer *pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+
+  // Create the BLE Service
+  BLEService *wasmService = pServer->createService(SERVICE_UUID);
+
+  // Create BLE Characteristics and Create a BLE Descriptor
+  wasmService->addCharacteristic(&wasmCharacteristics);
+  wasmDescriptor.setValue("Upload Wasm file");
+  wasmCharacteristics.addDescriptor(new BLE2902());
+
+  // Start the service
+  wasmService->start();
+
+  // Start advertising
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pServer->getAdvertising()->start();
+  Serial.println("Waiting a client connection to notify...");
+}
+
 
 /**
  * @fn
@@ -334,31 +378,7 @@ void setup(){
 
   server.begin();*/
 
-  // Create the BLE Device
-  BLEDevice::init(bleServerName);
-
-  Serial.println("ble initilized");
-
-  // Create the BLE Server
-  BLEServer *pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new MyServerCallbacks());
-
-  // Create the BLE Service
-  BLEService *wasmService = pServer->createService(SERVICE_UUID);
-
-  // Create BLE Characteristics and Create a BLE Descriptor
-  wasmService->addCharacteristic(&wasmCharacteristics);
-  wasmDescriptor.setValue("Upload Wasm file");
-  wasmCharacteristics.addDescriptor(new BLE2902());
-
-  // Start the service
-  wasmService->start();
-
-  // Start advertising
-  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(SERVICE_UUID);
-  pServer->getAdvertising()->start();
-  Serial.println("Waiting a client connection to notify...");
+  ble_start();
 
 }
 
@@ -372,6 +392,7 @@ void loop(){
   if (deviceConnected) {
       if(newWasmAvailable){
         if(currentTransmitOffset == 0 && !sendNextPacketFlag){
+          delay(1000); //Client node cannot get a first packet if the packet is sent just after connecting.
           startTransmit();
         }
         else if(sendNextPacketFlag){
@@ -380,6 +401,6 @@ void loop(){
     }
   }
 
-  delay(1000);
+  delay(50); //Packet loss causes very often if no delay time given
 }
 
