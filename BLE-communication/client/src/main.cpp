@@ -1,6 +1,9 @@
 /**
  * @file main.cpp
- * @brief Client for Wasm binrary transmission between ESP32s using BLE. 
+ * @brief Client for Wasm binrary transmission between ESP32s using BLE.
+ * Platform IO currently does not support Arduino v2.0 or later, so setMTU in BLEClient is not available from the original packege.
+ * https://github.com/platformio/platform-espressif32/issues/619
+ * 
  * Links of references:
  + https://randomnerdtutorials.com/esp32-ble-server-client/
  */

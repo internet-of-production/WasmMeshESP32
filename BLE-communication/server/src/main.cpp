@@ -3,6 +3,7 @@
  * @brief Wasm binrary transmission between ESP32s using BLE.  
  * Links of references:
  + https://randomnerdtutorials.com/esp32-ble-server-client/
+ * https://github.com/nkolban/esp32-snippets/issues/798
  */
 #include <Arduino.h>
 #include <esp_wifi.h>
@@ -24,7 +25,9 @@
 #define FATAL(func, msg) { Serial.print("Fatal: " func " "); Serial.println(msg); return; }
 #define CHANNEL 0
 //Default MTU of BLE is 23 Byte. Max. size is not usable due to packet's structure. Furthermore, notfy allows only max. 20 Byte. (It also sends packets flag, total packet size, offset, etc.)
-#define MAX_PAYLOAD_SIZE 17 
+#define MAX_PAYLOAD_SIZE 17
+#define NOTIFY_OVERHEAD_SIZE 3 //Notify header needs 3 byte
+#define WASM_PACKET_HEADER_SIZE 3 //offset and message flag need 3 byte
 #define bleServerName "Wasm_ESP32"
 
 // See the following for generating UUIDs:
@@ -35,6 +38,7 @@
 // Wasm Characteristic and Descriptor
 BLECharacteristic wasmCharacteristics("f5703842-3515-4da8-ab2e-d40fbf457105", BLECharacteristic::PROPERTY_NOTIFY);
 BLEDescriptor wasmDescriptor(BLEUUID((uint16_t)0x2901));
+uint16_t wasmPayloadSize = 17;//default MTU is 23byte. Notify header needs 3 byte, offset and message flag need 3 byte => 23-3-3=17 byte
 
 //TODO: Update if overwritten by WebIDE. The current ID in flash. 
 uint8_t wasmVersionID = 101;
@@ -140,6 +144,9 @@ void resetTransmissionStatus(){
 
 class MyServerCallbacks: public BLEServerCallbacks {
   void onConnect(BLEServer* pServer) {
+    wasmPayloadSize = pServer->getPeerMTU(pServer->getConnId()) - NOTIFY_OVERHEAD_SIZE - WASM_PACKET_HEADER_SIZE;//Negotiate the mtu size with a client.
+    Serial.print("Received payload size: ");
+    Serial.println(wasmPayloadSize);
     deviceConnected = true;
   };
   void onDisconnect(BLEServer* pServer) {
@@ -187,7 +194,7 @@ void startTransmit()
   double fileSize = file.size();
   file.close();
   currentTransmitOffset = 0;
-  numberOfPackets = ceil(fileSize/MAX_PAYLOAD_SIZE); //split binary data into the MTU size
+  numberOfPackets = ceil(fileSize/wasmPayloadSize); //split binary data into the MTU size
   Serial.println(numberOfPackets);
   //TODO: Read the current wasmVersionID from flash !!
   //integer value must be splitted into uint_8 because of esp_now_send(). the bit shift >>8 means that it takes second byte. 
@@ -226,14 +233,14 @@ void sendNextPacket()
   }
 
   // set array size.
-  int fileDataSize = MAX_PAYLOAD_SIZE; // if its the last package - we adjust the size !!!
+  int fileDataSize = wasmPayloadSize; // if its the last package - we adjust the size !!!
   if (currentTransmitOffset == numberOfPackets - 1)
   {
     Serial.println("*************************");
     Serial.println(file.size());
     Serial.println(numberOfPackets - 1);
-    Serial.println((numberOfPackets - 1)*MAX_PAYLOAD_SIZE);
-    fileDataSize = file.size() - ((numberOfPackets - 1) * MAX_PAYLOAD_SIZE);
+    Serial.println((numberOfPackets - 1)*wasmPayloadSize);
+    fileDataSize = file.size() - ((numberOfPackets - 1) * wasmPayloadSize);
   }
 
   // define message array
@@ -241,7 +248,7 @@ void sendNextPacket()
   messageArray[0] = 0x02;
 
   //offset
-  file.seek(currentTransmitOffset * MAX_PAYLOAD_SIZE);
+  file.seek(currentTransmitOffset * wasmPayloadSize);
   currentTransmitOffset++;
 
   messageArray[1] = currentTransmitOffset >> 8;
