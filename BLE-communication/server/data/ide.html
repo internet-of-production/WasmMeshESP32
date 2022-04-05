@@ -11,59 +11,59 @@
                     const SOURCE_CODE = document.getElementById('code').value;
                     //const IMPORTED_CODE = document.getElementById('imported_code').value;
                     try {
-                        const stdout = asc.createMemoryStream();
-                        const stderr = asc.createMemoryStream();
-                        asc.main([
-                            "main.ts",
-                            "-O3",
-                            "--runtime", "stub",
-                            "--binaryFile", "main.wasm",
-                            "--textFile", "main.wat",
-                            "--sourceMap"
-                        ], {
-                            stdout,
-                            stderr,
-                            readFile(name, baseDir) {
-                                switch(name) {
-                                    case "main.ts":
-                                        return SOURCE_CODE;
-                                    case "arduino.ts":
-                                        return IMPORTED_CODE;
-                                    default:
-                                        return null;
-                                }
-                            },
-                            writeFile(name, data, baseDir) {
-                                console.log(`>>> WRITE:${name} >>>\n${data.length}`);
-                                if (name === 'main.wasm') {
-                                    const formData = new FormData();
+                      const stdout = asc.createMemoryStream();
+                      const stderr = asc.createMemoryStream();
+                      asc.main([
+                        "main.ts",
+                        "-O3",
+                        "--runtime", "stub",
+                        "--binaryFile", "main.wasm",
+                        "--textFile", "main.wat",
+                        "--sourceMap"
+                      ], {
+                        stdout,
+                        stderr,
+                        readFile(name, baseDir) {
+                          switch(name) {
+                            case "main.ts":
+                              return SOURCE_CODE;
+                            case "arduino.ts":
+                              return IMPORTED_CODE;
+                            default:
+                              return null;
+                          }
+                        },
+                        writeFile(name, data, baseDir) {
+                          console.log(`>>> WRITE:${name} >>>\n${data.length}`);
+                          if (name === 'main.wasm') {
+                            const formData = new FormData();
 
-                                    const blob = new Blob([data]);
-                                    formData.append('file', blob, "main.wasm");
+                            const blob = new Blob([data]);
+                            formData.append('file', blob, "main.wasm");
 
-                                    const options = {
-                                        method: 'POST',
-                                        body: formData,
-                                    };
+                            const options = {
+                                method: 'POST',
+                                body: formData,
+                            };
 
-                                    fetch('/upload', options)
-                                }
-                            },
-                            listFiles(dirname, baseDir) {
-                                return [];
-                            }
-                        }, err => {
-                            console.log(`>>> STDOUT >>>\n${stdout.toString()}`);
-                            console.log(`>>> STDERR >>>\n${stderr.toString()}`);
-                            if (err) {
-                                console.log(">>> THROWN >>>");
-                                console.log(err);
-                            }
-                        });
+                            fetch('/upload', options)
+                          }
+                        },
+                        listFiles(dirname, baseDir) {
+                          return [];
+                        }
+                      }, err => {
+                        console.log(`>>> STDOUT >>>\n${stdout.toString()}`);
+                        console.log(`>>> STDERR >>>\n${stderr.toString()}`);
+                        if (err) {
+                          console.log(">>> THROWN >>>");
+                          console.log(err);
+                        }
+                      });
 
                         // upload file
                         //const fileInput = document.getElementById('form-upload') ;
-
+                        
                     }
                     catch (error){
                         console.log('A compilation error occured:');
@@ -73,6 +73,7 @@
                 });
             });
         }
+
     </script>
     <style type="text/css">
         textarea {
@@ -111,25 +112,25 @@
     // @ts-ignore: decorator
     @external("showArrayRaw")
     export declare function showArrayRaw(v1:f32,v2:f32,v3:f32,v4:f32): void;
-
-
+    
+    
     // @ts-ignore: decorator
     @external("printUTF16")
     export declare function printUTF16(ptr: usize, len: usize): void;
-
+    
     export function print(str: string): void {
         printUTF16(changetype<usize>(str), str.length);
     }
-
+    
     export function println(str: string): void {
         print(str);
         print('\n');
     }
-
+    
     // @ts-ignore: decorator
     @external("jsonEncoder")
     export declare function jsonEncoder(ptr: usize, len: usize, number: i32, value: f32): void;
-
+    
     // @ts-ignore: decorator
     @external("setConfJson")
     export declare function setConfJson(ptr: usize, len: usize): void;
