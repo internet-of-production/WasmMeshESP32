@@ -12,6 +12,11 @@
 #include "WiFi.h"
 #include <SPI.h>
 
+//wasm3
+#include "wasm3.h"
+#include "m3_env.h"
+#include "wasm3_defs.h"
+
 //Web Server
 #include <ESPAsyncWebServer.h>
 #include <ESPmDNS.h>
@@ -19,6 +24,16 @@
 #define   MESH_PREFIX     "WasmWifiMesh"
 #define   MESH_PASSWORD   "WasmWasi"
 #define   MESH_PORT       5555
+
+#define WASM_STACK_SLOTS    4000
+#define CALC_INPUT  2
+#define FATAL(func, msg) { Serial.print("Fatal: " func " "); Serial.println(msg); return; }
+
+IM3Environment env;
+IM3Runtime runtime;
+IM3Module module;
+IM3Function calcWasm;
+int wasmResult = 0;
 
 IPAddress getlocalIP();
 IPAddress espIP(0,0,0,0);
@@ -154,6 +169,92 @@ void nodeTimeAdjustedCallback(int32_t offset) {
     Serial.printf("Adjusted time %u. Offset = %d\n", mesh.getNodeTime(),offset);
 }
 
+/**
+ * @fn 
+ * WASM setup using wasm3
+ */
+
+static void run_wasm(void*)
+{
+  // load wasm from SPIFFS
+  /* If default CONFIG_ARDUINO_LOOP_STACK_SIZE 8192 < wasmFile,
+  a new size must be given in  \Users\<user>\.platformio\packages\framework-arduinoespressif32\tools\sdk\include\config\sdkconfig.h
+  https://community.platformio.org/t/esp32-stack-configuration-reloaded/20994/2
+  */
+  File wasmFile = SPIFFS.open("/main.wasm", "r");
+  unsigned int build_main_wasm_len = wasmFile.size();
+  Serial.println("wasm_length:");
+  Serial.println(build_main_wasm_len);
+  // read file
+  unsigned char build_main_wasm[build_main_wasm_len];
+  wasmFile.readBytes((char *) build_main_wasm, build_main_wasm_len);
+
+  Serial.println("Loading WebAssembly was successful");
+
+  M3Result result = m3Err_none;
+
+  //it warks also without using variable
+  //uint8_t* wasm = (uint8_t*)build_app_wasm;
+
+  env = m3_NewEnvironment ();
+  if (!env) FATAL("NewEnvironment", "failed");
+
+  runtime = m3_NewRuntime (env, WASM_STACK_SLOTS, NULL);
+  if (!runtime) FATAL("m3_NewRuntime", "failed");
+
+  #ifdef WASM_MEMORY_LIMIT
+    runtime->memoryLimit = WASM_MEMORY_LIMIT;
+  #endif
+
+   result = m3_ParseModule (env, &module, build_main_wasm, build_main_wasm_len);
+   if (result) FATAL("m3_ParseModule", result);
+
+   result = m3_LoadModule (runtime, module);
+   if (result) FATAL("m3_LoadModule", result);
+
+   // link
+   //result = LinkArduino (runtime);
+   //if (result) FATAL("LinkArduino", result);
+
+
+   result = m3_FindFunction (&calcWasm, runtime, "calcWasm");
+   if (result) FATAL("m3_FindFunction(calcWasm)", result);
+
+   Serial.println("Running WebAssembly...");
+
+}
+
+  /**
+ * @fn 
+ * Call WASM task
+ */
+
+  void wasm_task(){
+    const void *i_argptrs[CALC_INPUT];
+    byte inputBytes[CALC_INPUT] = {0x01, 0x02};
+    M3Result result = m3Err_none;
+    
+    for(int i=0; i<CALC_INPUT ;i++){
+      i_argptrs[i] = &inputBytes[i];
+    }
+
+    /*
+    m3_Call(function, number_of_arguments, arguments_array)
+    To get return, one have to call a function with m3_Call first, then call m3_GetResultsV(function, adress).
+    (Apparently) m3_Call stores the result in the liner memory, then m3_GetResultsV accesses the address.
+    */
+    result = m3_Call(calcWasm,CALC_INPUT,i_argptrs);                       
+    if(result){
+      FATAL("m3_Call(calcWasm):", result);
+    }
+
+    result = m3_GetResultsV(calcWasm, &wasmResult);
+      if(result){
+      FATAL("m3_GetResultsV(calcWasm):", result);
+    }
+
+  }
+
 void setup() {
   Serial.begin(115200);
 
@@ -187,6 +288,9 @@ void setup() {
           request->send(404, "Not found");
       }
   });
+
+  //set up for wasm
+  run_wasm(NULL);
 
 
 //mesh.setDebugMsgTypes( ERROR | MESH_STATUS | CONNECTION | SYNC | COMMUNICATION | GENERAL | MSG_TYPES | REMOTE ); // all types on
@@ -224,6 +328,11 @@ void loop() {
     espIP = getlocalIP();
     Serial.println("IP Address: " + espIP.toString());
   }
+
+  wasm_task();
+  //Serial.println("Wasm result:");
+  //Serial.println(wasmResult);
+  
 }
 
 IPAddress getlocalIP() {
